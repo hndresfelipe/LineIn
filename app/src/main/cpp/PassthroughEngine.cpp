@@ -65,9 +65,9 @@ bool PassthroughEngine::openStreams() {
     // Get the actual sample rate from output stream
     mSampleRate = mOutputStream->getSampleRate();
 
-    // Detect MMAP: AAudio with small burst size indicates MMAP, large burst = Legacy AudioTrack
-    mOutputUsesMMAP = (mOutputStream->getAudioApi() == oboe::AudioApi::AAudio &&
-                       mOutputStream->getFramesPerBurst() < 200);
+    // Detect MMAP: AAudio with small burst duration indicates MMAP, large burst = Legacy AudioTrack
+    float outputBurstMs = (mOutputStream->getFramesPerBurst() * 1000.0f) / mSampleRate;
+    mOutputUsesMMAP = (mOutputStream->getAudioApi() == oboe::AudioApi::AAudio && outputBurstMs < 5.0f);
 
     // Set buffer size based on mode:
     // - MMAP: 1x burst for minimum latency
@@ -109,8 +109,8 @@ bool PassthroughEngine::openStreams() {
     mInputStream->setBufferSizeInFrames(mInputStream->getFramesPerBurst());
 
     // Detect MMAP for input
-    mInputUsesMMAP = (mInputStream->getAudioApi() == oboe::AudioApi::AAudio &&
-                      mInputStream->getFramesPerBurst() < 200);
+    float inputBurstMs = (mInputStream->getFramesPerBurst() * 1000.0f) / mSampleRate;
+    mInputUsesMMAP = (mInputStream->getAudioApi() == oboe::AudioApi::AAudio && inputBurstMs < 5.0f);
 
     LOGI("Input stream opened: sampleRate=%d, channelCount=%d, framesPerBurst=%d, bufferSize=%d, API=%s, MMAP=%s",
          mInputStream->getSampleRate(),
@@ -253,8 +253,12 @@ void PassthroughEngine::onErrorAfterClose(oboe::AudioStream *stream, oboe::Resul
     LOGE("Stream error after close: %s, restarting...", oboe::convertToText(result));
     if (result == oboe::Result::ErrorDisconnected) {
         // Restart on a separate thread to avoid deadlock
-        std::thread([this]() {
-            restartStreams();
+        // Use weak_ptr to prevent use-after-free if engine is destroyed
+        std::weak_ptr<PassthroughEngine> weakSelf = shared_from_this();
+        std::thread([weakSelf]() {
+            if (auto self = weakSelf.lock()) {
+                self->restartStreams();
+            }
         }).detach();
     }
 }

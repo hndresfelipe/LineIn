@@ -109,7 +109,9 @@ class MainActivity : ComponentActivity() {
                         audioStatus = audioStatus,
                         onGainChange = { newGain ->
                             gain = newGain
-                            PassthroughEngine.setGain(newGain)
+                            if (isPassthroughActive) {
+                                PassthroughEngine.setGain(newGain)
+                            }
                         },
                         onTargetBufferChange = { newTarget ->
                             targetBufferMs = newTarget
@@ -136,6 +138,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        handler.removeCallbacksAndMessages(null)
         super.onStop()
         if (isBound) {
             unbindService(serviceConnection)
@@ -282,8 +285,7 @@ fun MainScreen(
                     value = gain,
                     onValueChange = onGainChange,
                     valueRange = 0.5f..10.0f,
-                    modifier = Modifier.weight(1f),
-                    enabled = isActive
+                    modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Text(

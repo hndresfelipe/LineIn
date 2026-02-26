@@ -172,9 +172,9 @@ class AudioPassthroughService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("LineIn")
             .setContentText("Audio passthrough is active")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopIntent)
+            .addAction(R.drawable.ic_notification, "Stop", stopIntent)
             .setOngoing(true)
             .build()
     }

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <atomic>
 
 #define FDP_LOG_TAG "FullDuplexPass"
 #define FDP_LOGI(...) __android_log_print(ANDROID_LOG_INFO, FDP_LOG_TAG, __VA_ARGS__)
@@ -22,21 +23,21 @@ public:
     oboe::AudioStream* getInputStream() const { return mInputStream; }
     oboe::AudioStream* getOutputStream() const { return mOutputStream; }
 
-    void setGain(float gain) { mGain = gain; }
-    float getGain() const { return mGain; }
+    void setGain(float gain) { mGain.store(gain, std::memory_order_relaxed); }
+    float getGain() const { return mGain.load(std::memory_order_relaxed); }
 
     // Latency tuning parameters
     // Target buffer: how many frames we want to maintain in input buffer (lower = less latency, more risk)
-    void setTargetBufferFrames(int32_t frames) { mTargetBufferFrames = frames; }
-    int32_t getTargetBufferFrames() const { return mTargetBufferFrames; }
+    void setTargetBufferFrames(int32_t frames) { mTargetBufferFrames.store(frames, std::memory_order_relaxed); }
+    int32_t getTargetBufferFrames() const { return mTargetBufferFrames.load(std::memory_order_relaxed); }
 
     // Drain rate: how many extra frames to read per callback when over target (higher = faster drain, more artifacts)
     // 0 = no draining (current behavior), 1.0 = read double frames, 0.5 = read 50% extra
-    void setDrainRate(float rate) { mDrainRate = rate; }
-    float getDrainRate() const { return mDrainRate; }
+    void setDrainRate(float rate) { mDrainRate.store(rate, std::memory_order_relaxed); }
+    float getDrainRate() const { return mDrainRate.load(std::memory_order_relaxed); }
 
     // Get current buffer level for UI display
-    int32_t getCurrentBufferFrames() const { return mLastAvailableFrames; }
+    int32_t getCurrentBufferFrames() const { return mLastAvailableFrames.load(std::memory_order_relaxed); }
 
     oboe::Result start() {
         mCallbackCount = 0;
@@ -108,10 +109,15 @@ public:
 
         int32_t inputChannelCount = mInputStream->getChannelCount();
 
+        // Load atomic tuning parameters once per callback
+        float drainRate = mDrainRate.load(std::memory_order_relaxed);
+        int32_t targetBufferFrames = mTargetBufferFrames.load(std::memory_order_relaxed);
+        float gain = mGain.load(std::memory_order_relaxed);
+
         // Check how many frames are available
         auto availResult = mInputStream->getAvailableFrames();
         int32_t availableFrames = availResult ? availResult.value() : 0;
-        mLastAvailableFrames = availableFrames;
+        mLastAvailableFrames.store(availableFrames, std::memory_order_relaxed);
 
         // Calculate how many frames to read
         // Base: numFrames (what output needs)
@@ -119,12 +125,12 @@ public:
         int32_t framesToRead = numFrames;
         int32_t framesDrained = 0;
 
-        if (mDrainRate > 0.0f && mTargetBufferFrames > 0) {
-            int32_t excessFrames = availableFrames - mTargetBufferFrames;
+        if (drainRate > 0.0f && targetBufferFrames > 0) {
+            int32_t excessFrames = availableFrames - targetBufferFrames;
             if (excessFrames > 0) {
                 // Gradually drain: read extra frames based on drain rate
                 // drainRate 0.5 = read 50% extra, 1.0 = read double
-                int32_t extraFrames = static_cast<int32_t>(numFrames * mDrainRate);
+                int32_t extraFrames = static_cast<int32_t>(numFrames * drainRate);
                 // Don't drain more than the excess
                 extraFrames = std::min(extraFrames, excessFrames);
                 framesToRead = numFrames + extraFrames;
@@ -142,7 +148,7 @@ public:
         auto readResult = mInputStream->read(mInputBuffer.data(), framesToRead, 0);
 
         int32_t framesRead = 0;
-        if (readResult.value() > 0) {
+        if (readResult && readResult.value() > 0) {
             framesRead = readResult.value();
             mTotalFramesRead += framesRead;
             if (framesDrained > 0) {
@@ -164,7 +170,7 @@ public:
             int32_t bufferLatencyMs = (availableFrames * 1000) / mInputStream->getSampleRate();
             FDP_LOGI("Callback #%d: avail=%d (%dms), read=%d, skip=%d, target=%d, drain=%.1f",
                      mCallbackCount, availableFrames, bufferLatencyMs, framesRead,
-                     framesToSkip, mTargetBufferFrames, mDrainRate);
+                     framesToSkip, targetBufferFrames, drainRate);
         }
 
         mTotalFramesWritten += numFrames;
@@ -174,7 +180,7 @@ public:
         if (inputChannelCount == 1 && outputChannelCount == 2) {
             for (int i = 0; i < framesToUse; i++) {
                 // Use frames starting at framesToSkip (newest frames)
-                float sample = mInputBuffer[i + framesToSkip] * mGain;
+                float sample = mInputBuffer[i + framesToSkip] * gain;
                 // Soft clamp to prevent hard clipping distortion
                 sample = softClamp(sample);
                 outputFloats[i * 2] = sample;
@@ -188,7 +194,7 @@ public:
         } else if (inputChannelCount == outputChannelCount) {
             int32_t skipSamples = framesToSkip * inputChannelCount;
             for (int i = 0; i < framesToUse * outputChannelCount; i++) {
-                float sample = mInputBuffer[i + skipSamples] * mGain;
+                float sample = mInputBuffer[i + skipSamples] * gain;
                 outputFloats[i] = softClamp(sample);
             }
             for (int i = framesToUse * outputChannelCount; i < numFrames * outputChannelCount; i++) {
@@ -203,27 +209,31 @@ public:
     }
 
 private:
-    // Soft clamp using tanh-style saturation to prevent hard clipping
+    // Soft clamp using cubic saturation to prevent hard clipping
     // Keeps signal in -1.0 to 1.0 range with smooth limiting
+    // Polynomial approximation avoids expensive tanhf in the audio callback
     inline float softClamp(float x) {
-        // Fast approximation: for |x| < 0.9, pass through; above that, soft limit
+        if (x > 1.0f) return 1.0f;
+        if (x < -1.0f) return -1.0f;
         if (x > 0.9f) {
-            return 0.9f + 0.1f * tanhf((x - 0.9f) * 5.0f);
+            float t = (x - 0.9f) * 10.0f;  // normalize 0.9..1.0+ to 0..1
+            return 0.9f + 0.1f * t / (1.0f + t);  // rational saturation
         } else if (x < -0.9f) {
-            return -0.9f + 0.1f * tanhf((x + 0.9f) * 5.0f);
+            float t = (-x - 0.9f) * 10.0f;
+            return -0.9f - 0.1f * t / (1.0f + t);
         }
         return x;
     }
 
     oboe::AudioStream *mInputStream = nullptr;
     oboe::AudioStream *mOutputStream = nullptr;
-    float mGain = 3.0f;
+    std::atomic<float> mGain{3.0f};
     std::vector<float> mInputBuffer;
 
-    // Latency tuning
-    int32_t mTargetBufferFrames = 0;  // 0 = disabled (no draining)
-    float mDrainRate = 0.0f;          // 0 = disabled, 0.5 = gradual, 1.0 = aggressive
-    int32_t mLastAvailableFrames = 0; // For UI display
+    // Latency tuning (atomic for cross-thread access from UI and audio callback)
+    std::atomic<int32_t> mTargetBufferFrames{0};  // 0 = disabled (no draining)
+    std::atomic<float> mDrainRate{0.0f};           // 0 = disabled, 0.5 = gradual, 1.0 = aggressive
+    std::atomic<int32_t> mLastAvailableFrames{0};  // For UI display
 
     // Statistics
     int32_t mCallbackCount = 0;

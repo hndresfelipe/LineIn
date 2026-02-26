@@ -2,9 +2,11 @@
 #define GUITARPASSTHROUGH_PASSTHROUGHENGINE_H
 
 #include <oboe/Oboe.h>
+#include <memory>
 #include "FullDuplexPass.h"
 
-class PassthroughEngine : public oboe::AudioStreamErrorCallback {
+class PassthroughEngine : public oboe::AudioStreamErrorCallback,
+                          public std::enable_shared_from_this<PassthroughEngine> {
 public:
     PassthroughEngine();
     ~PassthroughEngine();
