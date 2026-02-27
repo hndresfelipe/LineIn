@@ -227,7 +227,7 @@ private:
 
     oboe::AudioStream *mInputStream = nullptr;
     oboe::AudioStream *mOutputStream = nullptr;
-    std::atomic<float> mGain{3.0f};
+    std::atomic<float> mGain{8.0f};
     std::vector<float> mInputBuffer;
 
     // Latency tuning (atomic for cross-thread access from UI and audio callback)

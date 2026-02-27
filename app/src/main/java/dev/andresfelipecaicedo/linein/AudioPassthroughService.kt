@@ -8,9 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Binder
 import android.os.IBinder
@@ -21,7 +19,6 @@ class AudioPassthroughService : Service() {
 
     private val binder = LocalBinder()
     private var audioManager: AudioManager? = null
-    private var audioFocusRequest: AudioFocusRequest? = null
     private var isRunning = false
 
     inner class LocalBinder : Binder() {
@@ -52,55 +49,36 @@ class AudioPassthroughService : Service() {
     fun startPassthrough() {
         if (isRunning) return
 
-        // Request audio focus
-        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            .setOnAudioFocusChangeListener { focusChange ->
-                when (focusChange) {
-                    AudioManager.AUDIOFOCUS_LOSS -> stopPassthrough()
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> PassthroughEngine.setEffectOn(false)
-                    AudioManager.AUDIOFOCUS_GAIN -> PassthroughEngine.setEffectOn(true)
-                }
-            }
-            .build()
+        // No audio focus requested: LineIn is a passthrough tool that must
+        // coexist with other audio apps without interference from notifications
 
-        audioFocusRequest = focusRequest
-        val result = audioManager?.requestAudioFocus(focusRequest)
-
-        if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            // Find USB audio output device (iRig HD 2)
-            val usbOutputDevice = findUsbAudioOutputDevice()
-            if (usbOutputDevice != null) {
-                Log.i(TAG, "Found USB audio output device: ${usbOutputDevice.productName}, ID: ${usbOutputDevice.id}")
-            } else {
-                Log.w(TAG, "No USB audio output device found, using default")
-            }
-
-            // Create and start native engine
-            PassthroughEngine.create()
-
-            // Set output device before starting
-            usbOutputDevice?.let {
-                PassthroughEngine.setOutputDeviceId(it.id)
-            }
-
-            PassthroughEngine.setEffectOn(true)
-
-            // Start foreground with notification
-            startForeground(
-                NOTIFICATION_ID,
-                createNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-
-            isRunning = true
+        // Find USB audio output device
+        val usbOutputDevice = findUsbAudioOutputDevice()
+        if (usbOutputDevice != null) {
+            Log.i(TAG, "Found USB audio output device: ${usbOutputDevice.productName}, ID: ${usbOutputDevice.id}")
+        } else {
+            Log.w(TAG, "No USB audio output device found, using default")
         }
+
+        // Create and start native engine
+        PassthroughEngine.create()
+
+        // Set output device before starting
+        usbOutputDevice?.let {
+            PassthroughEngine.setOutputDeviceId(it.id)
+        }
+
+        PassthroughEngine.setEffectOn(true)
+
+        // Start foreground with notification
+        startForeground(
+            NOTIFICATION_ID,
+            createNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        )
+
+        isRunning = true
     }
 
     fun stopPassthrough() {
@@ -109,9 +87,6 @@ class AudioPassthroughService : Service() {
         // Stop native engine
         PassthroughEngine.setEffectOn(false)
         PassthroughEngine.delete()
-
-        // Abandon audio focus
-        audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
 
         // Stop foreground service
         stopForeground(STOP_FOREGROUND_REMOVE)

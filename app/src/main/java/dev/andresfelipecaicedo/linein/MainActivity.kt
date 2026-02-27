@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
 
     private var isPassthroughActive by mutableStateOf(false)
     private var permissionsGranted by mutableStateOf(false)
-    private var gain by mutableFloatStateOf(3.0f)
+    private var gain by mutableFloatStateOf(8.0f)
     private var targetBufferMs by mutableStateOf(0)  // 0 = disabled
     private var drainRate by mutableFloatStateOf(0.0f)  // 0 = disabled
     private var audioStatus by mutableStateOf(AudioStatus())
@@ -284,7 +284,7 @@ fun MainScreen(
                 Slider(
                     value = gain,
                     onValueChange = onGainChange,
-                    valueRange = 0.5f..10.0f,
+                    valueRange = 3.0f..12.0f,
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(16.dp))
@@ -450,7 +450,7 @@ fun LatencyTuningCard(
             // Low Latency preset (recommended)
             Button(
                 onClick = {
-                    onTargetBufferChange(20)
+                    onTargetBufferChange(19)
                     onDrainRateChange(1.0f)
                 },
                 modifier = Modifier.weight(1f)
@@ -474,7 +474,7 @@ fun LatencyTuningCard(
 
         // Preset descriptions
         Text(
-            text = "Low: ~20ms buffer, best response (recommended)",
+            text = "Low: ~19ms buffer, best response (recommended)",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary
         )
